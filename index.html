@@ -1,0 +1,226 @@
+from pathlib import Path
+
+html = r'''<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>BlockWorld — Voxel Sandbox</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#87ceeb;font-family:Arial,sans-serif}
+#game{width:100%;height:100%;display:block;cursor:crosshair}
+#ui{position:fixed;inset:0;pointer-events:none;color:#fff;text-shadow:0 2px 3px #000}
+#cross{position:absolute;left:50%;top:50%;width:18px;height:18px;transform:translate(-50%,-50%)}
+#cross:before,#cross:after{content:"";position:absolute;background:#fff;box-shadow:0 0 2px #000}
+#cross:before{width:2px;height:18px;left:8px;top:0}.#cross:after{height:2px;width:18px;top:8px;left:0}
+#cross:after{content:"";position:absolute;background:#fff;box-shadow:0 0 2px #000;height:2px;width:18px;top:8px;left:0}
+#top{position:absolute;top:12px;left:12px;background:#0008;padding:9px 12px;border-radius:8px;font-size:13px}
+#help{position:absolute;top:12px;right:12px;background:#0008;padding:9px 12px;border-radius:8px;font-size:12px;line-height:1.5}
+#hotbar{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);display:flex;gap:4px;background:#0008;padding:5px;border-radius:7px}
+.slot{width:54px;height:54px;border:3px solid #555;background:#222b;position:relative;display:flex;align-items:center;justify-content:center}
+.slot.sel{border-color:#fff;box-shadow:0 0 0 2px #000}
+.swatch{width:34px;height:34px;border:2px solid #0008}
+.num{position:absolute;left:4px;top:2px;font-size:11px}.name{position:absolute;bottom:1px;font-size:8px}
+#menu{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#18212df5;padding:22px;border:2px solid #718096;border-radius:12px;width:min(92vw,520px);pointer-events:auto;display:none}
+#menu h2{margin:0 0 12px}.btn{display:inline-block;background:#3b82f6;color:#fff;border:0;border-radius:7px;padding:10px 14px;margin:5px 4px 5px 0;cursor:pointer;font-weight:bold}
+.btn.alt{background:#475569}.danger{background:#b91c1c}
+#modStatus{margin-top:10px;font-size:12px;color:#a7f3d0}
+#touch{display:none;position:absolute;inset:0;pointer-events:none}
+.touchbtn{pointer-events:auto;position:absolute;width:58px;height:58px;border-radius:50%;background:#0005;border:1px solid #fff7;color:#fff;font-size:22px}
+@media(max-width:800px){#help{display:none}#touch{display:block}.touchbtn.up{right:78px;bottom:125px}.touchbtn.down{right:78px;bottom:15px}.touchbtn.left{right:142px;bottom:70px}.touchbtn.right{right:14px;bottom:70px}.touchbtn.jump{right:78px;bottom:190px}.touchbtn.break{left:15px;bottom:80px}.touchbtn.place{left:80px;bottom:80px}}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+  <div id="top">BLOCKWORLD <span id="coords"></span></div>
+  <div id="help">WASD di chuyển · Chuột nhìn · Space nhảy<br>Click trái phá · Click phải đặt · 1–8 chọn block<br>Esc mở menu · F3 tọa độ</div>
+  <div id="cross"></div>
+  <div id="hotbar"></div>
+  <div id="menu">
+    <h2>BlockWorld</h2>
+    <p>Voxel sandbox chạy ngay trong trình duyệt. Đây là game độc lập lấy cảm hứng từ thể loại voxel, không dùng mã nguồn hay tài sản của Minecraft.</p>
+    <button class="btn" id="resume">Tiếp tục</button>
+    <button class="btn alt" id="regen">Tạo thế giới mới</button>
+    <button class="btn alt" id="save">Lưu thế giới</button>
+    <button class="btn alt" id="load">Tải thế giới</button>
+    <button class="btn alt" id="mods">Cài mod JS</button>
+    <input id="modInput" type="file" accept=".js,.mjs" hidden>
+    <div id="modStatus">Mod API: đăng ký block, thay đổi thế giới và thêm logic bằng JavaScript.</div>
+  </div>
+</div>
+<div id="touch">
+ <button class="touchbtn up">▲</button><button class="touchbtn down">▼</button>
+ <button class="touchbtn left">◀</button><button class="touchbtn right">▶</button>
+ <button class="touchbtn jump">⤒</button><button class="touchbtn break">⛏</button><button class="touchbtn place">＋</button>
+</div>
+
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
+
+const canvas=document.querySelector("#game");
+const renderer=new THREE.WebGLRenderer({canvas,antialias:false});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x87ceeb); scene.fog=new THREE.Fog(0x87ceeb,28,75);
+const camera=new THREE.PerspectiveCamera(72,innerWidth/innerHeight,.05,120);
+const clock=new THREE.Clock();
+
+const BLOCKS={
+ grass:{name:"Cỏ",color:0x55a83b,solid:true},
+ dirt:{name:"Đất",color:0x8a5a36,solid:true},
+ stone:{name:"Đá",color:0x777b80,solid:true},
+ sand:{name:"Cát",color:0xd9c27a,solid:true},
+ wood:{name:"Gỗ",color:0x8b5a2b,solid:true},
+ leaves:{name:"Lá",color:0x2d7d32,solid:true},
+ glass:{name:"Kính",color:0x9bd9e8,solid:true,transparent:true},
+ brick:{name:"Gạch",color:0x9b4034,solid:true},
+};
+let world=new Map(), meshes=new Map(), selected="grass", seed=Math.random()*99999|0;
+const key=(x,y,z)=>`${x},${y},${z}`;
+const cubeGeo=new THREE.BoxGeometry(1,1,1);
+const materials={};
+for(const [id,b] of Object.entries(BLOCKS)){
+ materials[id]=new THREE.MeshLambertMaterial({color:b.color,transparent:!!b.transparent,opacity:b.transparent?.42:1});
+}
+const group=new THREE.Group(); scene.add(group);
+
+function noise(x,z){
+ let n=Math.sin((x+seed)*12.9898+(z-seed)*78.233)*43758.5453;
+ return n-Math.floor(n);
+}
+function heightAt(x,z){
+ return Math.floor(3 + Math.sin(x*.17)*1.7 + Math.cos(z*.15)*1.5 + noise(x,z)*2);
+}
+function generate(){
+ for(const m of meshes.values())group.remove(m); meshes.clear(); world.clear();
+ const R=22;
+ for(let x=-R;x<=R;x++)for(let z=-R;z<=R;z++){
+   const h=Math.max(1,heightAt(x,z));
+   for(let y=0;y<=h;y++){
+     let id=y===h?(h<=3?"sand":"grass"):(y>h-3?"dirt":"stone");
+     world.set(key(x,y,z),id);
+   }
+   if(h>=5 && noise(x+4,z-7)>.78){
+     for(let y=1;y<=3;y++) world.set(key(x,h+y,z),"wood");
+     for(let dx=-2;dx<=2;dx++)for(let dz=-2;dz<=2;dz++)for(let dy=2;dy<=4;dy++)
+       if(Math.abs(dx)+Math.abs(dz)+dy<7 && !world.has(key(x+dx,h+dy,z+dz))) world.set(key(x+dx,h+dy,z+dz),"leaves");
+   }
+ }
+ rebuild();
+ player.pos.set(0,heightAt(0,0)+2,4);
+}
+function rebuild(){
+ for(const m of meshes.values())group.remove(m); meshes.clear();
+ for(const [k,id] of world){
+   const [x,y,z]=k.split(",").map(Number);
+   // simple hidden-face culling
+   const neigh=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+   if(neigh.every(([dx,dy,dz])=>world.has(key(x+dx,y+dy,z+dz)))) continue;
+   const m=new THREE.Mesh(cubeGeo,materials[id]||materials.grass);
+   m.position.set(x+.5,y+.5,z+.5); m.castShadow=true;m.receiveShadow=true;m.userData={x,y,z,id};
+   group.add(m);meshes.set(k,m);
+ }
+}
+const light=new THREE.HemisphereLight(0xffffff,0x557755,1.7);scene.add(light);
+const sun=new THREE.DirectionalLight(0xffffff,1.5);sun.position.set(25,40,15);sun.castShadow=true;scene.add(sun);
+
+const player={pos:new THREE.Vector3(0,8,4),vel:new THREE.Vector3(),yaw:0,pitch:0,onGround:false};
+const eye=1.65, radius=.3, height=1.8;
+const keys={};
+addEventListener("keydown",e=>{keys[e.code]=true;if(/^Digit[1-8]$/.test(e.code)){selected=Object.keys(BLOCKS)[+e.code.slice(5)-1];renderHotbar()}if(e.code==="Escape")toggleMenu();if(e.code==="F3")document.querySelector("#coords").textContent=showCoords?"":"",showCoords=!showCoords});
+addEventListener("keyup",e=>keys[e.code]=false);
+let locked=false,showCoords=false;
+canvas.addEventListener("click",()=>{if(!document.querySelector("#menu").style.display||document.querySelector("#menu").style.display==="none") canvas.requestPointerLock?.()});
+document.addEventListener("pointerlockchange",()=>locked=document.pointerLockElement===canvas);
+addEventListener("mousemove",e=>{if(!locked)return;player.yaw-=e.movementX*.0025;player.pitch-=e.movementY*.0025;player.pitch=Math.max(-1.5,Math.min(1.5,player.pitch));});
+canvas.addEventListener("mousedown",e=>{if(!locked)return;e.preventDefault();if(e.button===0)breakBlock();if(e.button===2)placeBlock()});
+canvas.addEventListener("contextmenu",e=>e.preventDefault());
+
+function collides(p){
+ const minX=Math.floor(p.x-radius),maxX=Math.floor(p.x+radius);
+ const minY=Math.floor(p.y),maxY=Math.floor(p.y+height);
+ const minZ=Math.floor(p.z-radius),maxZ=Math.floor(p.z+radius);
+ for(let x=minX;x<=maxX;x++)for(let y=minY;y<=maxY;y++)for(let z=minZ;z<=maxZ;z++)
+   if(world.has(key(x,y,z)))return true;
+ return false;
+}
+function moveAxis(axis,amount){
+ const steps=Math.max(1,Math.ceil(Math.abs(amount)/.25)),s=amount/steps;
+ for(let i=0;i<steps;i++){player.pos[axis]+=s;if(collides(player)){player.pos[axis]-=s;if(axis==="y"){if(amount<0)player.onGround=true;player.vel.y=0;}break;}}
+}
+function ray(){
+ camera.updateMatrixWorld();const r=new THREE.Raycaster();r.setFromCamera(new THREE.Vector2(0,0),camera);
+ const hits=r.intersectObjects(group.children,false);return hits[0];
+}
+function breakBlock(){const h=ray();if(!h)return;const b=h.object.userData;world.delete(key(b.x,b.y,b.z));rebuild();}
+function placeBlock(){const h=ray();if(!h)return;const b=h.object.userData,n=h.face.normal;
+ const x=b.x+n.x,y=b.y+n.y,z=b.z+n.z,k=key(x,y,z);if(world.has(k))return;
+ const old={...player.pos};world.set(k,selected);rebuild();if(collides(player)){world.delete(k);rebuild();player.pos.set(old.x,old.y,old.z);}
+}
+function renderHotbar(){
+ const bar=document.querySelector("#hotbar");bar.innerHTML="";
+ Object.entries(BLOCKS).forEach(([id,b],i)=>{
+  const s=document.createElement("div");s.className="slot"+(id===selected?" sel":"");
+  s.innerHTML=`<span class="num">${i+1}</span><div class="swatch" style="background:#${b.color.toString(16).padStart(6,"0")}"></div><span class="name">${b.name}</span>`;
+  bar.appendChild(s);
+ });
+}
+function toggleMenu(){const m=document.querySelector("#menu");m.style.display=m.style.display==="block"?"none":"block";if(m.style.display==="block")document.exitPointerLock?.();}
+document.querySelector("#resume").onclick=()=>{document.querySelector("#menu").style.display="none";canvas.requestPointerLock?.()};
+document.querySelector("#regen").onclick=()=>{seed=Math.random()*99999|0;generate()};
+document.querySelector("#save").onclick=()=>{
+ const data=JSON.stringify({seed,blocks:[...world]});
+ const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([data],{type:"application/json"}));a.download="blockworld-save.json";a.click();
+};
+document.querySelector("#load").onclick=()=>{const i=document.createElement("input");i.type="file";i.accept=".json";i.onchange=()=>{const f=i.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{const d=JSON.parse(r.result);seed=d.seed;world=new Map(d.blocks);rebuild()};r.readAsText(f)};i.click()};
+document.querySelector("#mods").onclick=()=>document.querySelector("#modInput").click();
+document.querySelector("#modInput").onchange=e=>{
+ const f=e.target.files[0];if(!f)return;
+ const r=new FileReader();r.onload=async()=>{
+   try{
+     const api={
+       version:"1.0",
+       blocks:BLOCKS,
+       world:{get:(x,y,z)=>world.get(key(x,y,z)),set:(x,y,z,id)=>{if(BLOCKS[id])world.set(key(x,y,z),id)},remove:(x,y,z)=>world.delete(key(x,y,z))},
+       rebuild,
+       notify:t=>document.querySelector("#modStatus").textContent="Mod: "+t
+     };
+     const blob=new Blob([r.result],{type:"text/javascript"}),url=URL.createObjectURL(blob);
+     const mod=await import(url);URL.revokeObjectURL(url);
+     if(mod.default) await mod.default(api);
+     else if(mod.init) await mod.init(api);
+     rebuild();document.querySelector("#modStatus").textContent=`Đã nạp mod: ${f.name}`;
+   }catch(err){document.querySelector("#modStatus").textContent="Lỗi mod: "+err.message}
+ };r.readAsText(f);
+};
+
+function update(dt){
+ const forward=new THREE.Vector3(Math.sin(player.yaw),0,Math.cos(player.yaw));
+ const right=new THREE.Vector3(Math.cos(player.yaw),0,-Math.sin(player.yaw));
+ let wish=new THREE.Vector3();
+ if(keys.KeyW)wish.addScaledVector(forward,-1);if(keys.KeyS)wish.add(forward);
+ if(keys.KeyD)wish.add(right);if(keys.KeyA)wish.addScaledVector(right,-1);
+ if(wish.lengthSq())wish.normalize();
+ const speed=keys.ShiftLeft?7:4.5;
+ player.vel.x+=(wish.x*speed-player.vel.x)*Math.min(1,dt*12);
+ player.vel.z+=(wish.z*speed-player.vel.z)*Math.min(1,dt*12);
+ if(keys.Space&&player.onGround){player.vel.y=7;player.onGround=false}
+ player.vel.y-=18*dt;
+ moveAxis("x",player.vel.x*dt);moveAxis("z",player.vel.z*dt);player.onGround=false;moveAxis("y",player.vel.y*dt);
+ if(player.pos.y<-20){player.pos.set(0,heightAt(0,0)+3,4);player.vel.set(0,0,0)}
+ camera.position.set(player.pos.x,player.pos.y+eye,player.pos.z);
+ camera.rotation.order="YXZ";camera.rotation.y=player.yaw;camera.rotation.x=player.pitch;
+ document.querySelector("#coords").textContent=showCoords?` · ${player.pos.x.toFixed(1)} ${player.pos.y.toFixed(1)} ${player.pos.z.toFixed(1)}`:"";
+}
+function loop(){
+ const dt=Math.min(.05,clock.getDelta());update(dt);renderer.render(scene,camera);requestAnimationFrame(loop);
+}
+addEventListener("resize",()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+renderHotbar();generate();loop();
+</script>
+</body>
+</html>'''
+path=Path("/mnt/data/blockworld.html")
+path.write_text(html, encoding="utf-8")
+print(path)
